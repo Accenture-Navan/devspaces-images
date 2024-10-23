@@ -1,17 +1,5 @@
-# Copyright (c) 2022 Red Hat, Inc.
-# This program and the accompanying materials are made
-# available under the terms of the Eclipse Public License 2.0
-# which is available at https://www.eclipse.org/legal/epl-2.0/
-#
-# SPDX-License-Identifier: EPL-2.0
-#
-# Contributors:
-#   Red Hat, Inc. - initial API and implementation
-
-# use rhel8/ for Brew, not ubi8/
-# can pin to specific tag filter using rhel8/go-toolset#^1.17
 # https://registry.access.redhat.com/rhel8/go-toolset
-FROM rhel8/go-toolset:1.21.13-1.1727172995 as go-builder
+FROM registry.redhat.io/rhel8/go-toolset:1.21.13-1.1727172995 as go-builder
 
 USER root
 
@@ -21,59 +9,23 @@ RUN \
     ########################################################################
     # Build all Golang projects fetched from Cachito
     ########################################################################
-    dnf -y -q install golang make gzip which openshift-clients && \
-    # BEGIN Gopls
-    mkdir /home/tooling/go/bin -p && \
-    cd $REMOTE_SOURCES_DIR/gopls/app/gopls && \
-    # gopls must refer to tools as local dependency, which is located one dir above in the project
-    echo 'replace golang.org/x/tools => ../' >> go.mod && \
-    # build gopls application with dependencies resolved by Cachito (which are also resolved for 'tools' dependency)
-    source $REMOTE_SOURCES_DIR/gopls/cachito.env && \
-    GO111MODULE=on go build -o gopls && \
-    ./gopls version && \
-    # END Gopls
-
-    # BEGIN Kubedock
-    cd $REMOTE_SOURCES_DIR/kubedock/app && \
-    # build kubedock application with dependencies resolved by Cachito
-    source $REMOTE_SOURCES_DIR/kubedock/cachito.env && \
-    LDFLAGS="-X github.com/joyrex2001/kubedock/internal/config.Date=`date -u +%Y%m%d-%H%M%S`  \
-     -X github.com/joyrex2001/kubedock/internal/config.Build=9d21955b52e4905d916d24e724dcad195aef3515   \
-     -X github.com/joyrex2001/kubedock/internal/config.Version=0.11.0  \
-     -X github.com/joyrex2001/kubedock/internal/config.Image=joyrex2001/kubedock:0.11.0" && \
-    CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o kubedock && \
-    chmod +x ./kubedock && \
-    ./kubedock version && \
-    # END Kubedock
-
-    # CRW-3193 disable until we have a camel-k sample again
-    # BEGIN Kamel
-    # cd $REMOTE_SOURCES_DIR/camelk/app && \
-    # source $REMOTE_SOURCES_DIR/camelk/cachito.env && \
-    # make build-kamel && \
-    # ./kamel version && \
-    # END Kamel
-
-    # BEGIN stow
-    dnf -y -q install perl texinfo texinfo-tex git && \
-    cd $REMOTE_SOURCES_DIR/stow/app && \
-    mkdir -p $REMOTE_SOURCES_DIR/stow/app/build && \
-    autoreconf -iv && \
-    ./configure --prefix=$REMOTE_SOURCES_DIR/stow/app/build && \
-    make install && \
-    cd $REMOTE_SOURCES_DIR/stow/app/build/bin/ && \
-    ./stow --version
-    # END stow
+    dnf -y -q install golang make gzip which && \
+    # Install OpenShift CLI (oc) manually
+    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz -o /tmp/oc.tar.gz && \
+    tar -xzf /tmp/oc.tar.gz -C /usr/local/bin/ oc && \
+    chmod +x /usr/local/bin/oc && \
+    rm /tmp/oc.tar.gz
+ 
 
 # https://registry.access.redhat.com/ubi8-minimal
-FROM ubi8-minimal:8.10-1086
+FROM registry.redhat.io/ubi8-minimal:latest
 
 USER root
 
 ENV \
     # We install everything to /home/tooling/ as /home/user/ may get overwritten, see github.com/eclipse/che/issues/22412
     HOME=/home/tooling \
-    NODEJS_VERSION="20" \
+    NODEJS_VERSION="18" \
     PYTHON_VERSION="3.11" \
     PHP_VERSION="7.4" \
     XDEBUG_VERSION="3.1.6" \
@@ -107,17 +59,17 @@ ENV \
     COMPNAME="udi-rhel8"
 
 LABEL summary="$SUMMARY" \
-      description="$DESCRIPTION" \
-      io.k8s.description="$DESCRIPTION" \
-      io.k8s.display-name="$DESCRIPTION" \
-      io.openshift.tags="$PRODNAME,$COMPNAME" \
-      com.redhat.component="$PRODNAME-$COMPNAME-container" \
-      name="$PRODNAME/$COMPNAME" \
-      version="3.18" \
-      license="EPLv2" \
-      maintainer="Nick Boldt <nboldt@redhat.com>" \
-      io.openshift.expose-services="" \
-      usage=""
+    description="$DESCRIPTION" \
+    io.k8s.description="$DESCRIPTION" \
+    io.k8s.display-name="$DESCRIPTION" \
+    io.openshift.tags="$PRODNAME,$COMPNAME" \
+    com.redhat.component="$PRODNAME-$COMPNAME-container" \
+    name="$PRODNAME/$COMPNAME" \
+    version="3.18" \
+    license="EPLv2" \
+    maintainer="Nick Boldt <nboldt@redhat.com>" \
+    io.openshift.expose-services="" \
+    usage=""
 
 RUN mkdir -p /home/tooling/
 ADD etc/storage.conf $HOME/.config/containers/storage.conf
@@ -144,35 +96,33 @@ RUN \
     dnf -y -q module reset container-tools maven nodejs php; \
     dnf -y -q module install container-tools:rhel8 maven:3.8 nodejs:$NODEJS_VERSION php:$PHP_VERSION && \
     dnf -y -q install --setopt=tsflags=nodocs \
-        golang \
-        java-1.8.0-openjdk java-1.8.0-openjdk-devel java-1.8.0-openjdk-headless \
-            java-11-openjdk java-11-openjdk-devel java-11-openjdk-src java-11-openjdk-headless \
-            java-17-openjdk java-17-openjdk-devel java-17-openjdk-headless \
-            java-21-openjdk java-21-openjdk-devel java-21-openjdk-headless \
-        nodejs npm nodejs-nodemon nss_wrapper \
-        make cmake gcc gcc-c++ \
-            llvm-toolset clang clang-libs clang-tools-extra git-clang-format gdb \
-        php php-cli php-fpm php-opcache php-devel php-pear php-gd php-intl php-mysqli php-zlib php-curl \
-        python3.11 python3.11-devel python3.11-setuptools python3.11-pip python3.11-wheel \
-        libssh-devel libffi-devel redhat-rpm-config cargo openssl-devel pkg-config jq \
-        podman buildah skopeo fuse-overlayfs \
-        e2fsprogs libatomic_ops git openssl-devel ca-certificates \
-        bash bash-completion tar gzip unzip bzip2 which shadow-utils findutils wget curl sudo git git-lfs procps-ng tree vim \
-        # For OpenShift Client 4 (oc): rhocp-4.12-for-rhel-8-x86_64-rpms
-        # must hard code a version because otherwise CVP/Brew fails with: Failed component comparison for components: openshift-clients
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/o/odo-3.9.0-1.el8.x86_64.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/o/odo-3.9.0-1.el8.s390x.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/o/odo-3.9.0-1.el8.ppc64le.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/h/helm-3.10.1-2.el8.x86_64.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/s390x/ocp/tools/4.12/os/Packages/h/helm-3.10.1-2.el8.s390x.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/ppc64le/ocp/tools/4.12/os/Packages/h/helm-3.10.1-2.el8.ppc64le.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/rhocp/4.12/os/Packages/o/openshift-clients-4.12.0-202404161006.p0.gd691257.assembly.stream.el8.x86_64.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/s390x/rhocp/4.12/os/Packages/o/openshift-clients-4.12.0-202404161006.p0.gd691257.assembly.stream.el8.s390x.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/ppc64le/rhocp/4.12/os/Packages/o/openshift-clients-4.12.0-202404161006.p0.gd691257.assembly.stream.el8.ppc64le.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/pipelines/1.13/os/Packages/o/openshift-pipelines-client-1.13.0-11230.el8.x86_64.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/s390x/pipelines/1.13/os/Packages/o/openshift-pipelines-client-1.13.0-11230.el8.s390x.rpm
-        # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/ppc64le/pipelines/1.13/os/Packages/o/openshift-pipelines-client-1.13.0-11230.el8.ppc64le.rpm
-        odo-3.9.0-1.el8 helm-3.10.1-2.el8 openshift-clients-4.12.0-202404161006.p0.gd691257.assembly.stream.el8 openshift-pipelines-client-1.13.0-11230.el8 \
+    golang \
+    java-1.8.0-openjdk java-1.8.0-openjdk-devel java-1.8.0-openjdk-headless \
+    java-11-openjdk java-11-openjdk-devel java-11-openjdk-headless \
+    java-17-openjdk java-17-openjdk-devel java-17-openjdk-headless \
+    java-21-openjdk java-21-openjdk-devel java-21-openjdk-headless \
+    nodejs npm nodejs-nodemon nss_wrapper \
+    make cmake gcc gcc-c++ \
+    llvm-toolset clang clang-libs clang-tools-extra git-clang-format gdb \
+    php php-cli php-fpm php-opcache php-devel php-pear php-gd php-intl php-mysqli php-zlib php-curl \
+    python3.11 python3.11-devel python3.11-setuptools python3.11-pip python3.11-wheel \
+    libssh-devel libffi-devel redhat-rpm-config cargo openssl-devel pkg-config jq \
+    podman buildah skopeo fuse-overlayfs \
+    bash bash-completion tar gzip unzip bzip2 which shadow-utils findutils wget curl sudo git git-lfs procps-ng vim \
+    # For OpenShift Client 4 (oc): rhocp-4.12-for-rhel-8-x86_64-rpms
+    # must hard code a version because otherwise CVP/Brew fails with: Failed component comparison for components: openshift-clients
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/o/odo-3.9.0-1.el8.x86_64.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/o/odo-3.9.0-1.el8.s390x.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/o/odo-3.9.0-1.el8.ppc64le.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/ocp/tools/4.12/os/Packages/h/helm-3.10.1-2.el8.x86_64.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/s390x/ocp/tools/4.12/os/Packages/h/helm-3.10.1-2.el8.s390x.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/ppc64le/ocp/tools/4.12/os/Packages/h/helm-3.10.1-2.el8.ppc64le.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/rhocp/4.12/os/Packages/o/openshift-clients-4.12.0-202404161006.p0.gd691257.assembly.stream.el8.x86_64.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/s390x/rhocp/4.12/os/Packages/o/openshift-clients-4.12.0-202404161006.p0.gd691257.assembly.stream.el8.s390x.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/ppc64le/rhocp/4.12/os/Packages/o/openshift-clients-4.12.0-202404161006.p0.gd691257.assembly.stream.el8.ppc64le.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/x86_64/pipelines/1.13/os/Packages/o/openshift-pipelines-client-1.13.0-11230.el8.x86_64.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/s390x/pipelines/1.13/os/Packages/o/openshift-pipelines-client-1.13.0-11230.el8.s390x.rpm
+    # https://rhsm-pulp.corp.redhat.com/content/dist/layered/rhel8/ppc64le/pipelines/1.13/os/Packages/o/openshift-pipelines-client-1.13.0-11230.el8.ppc64le.rpm
     && \
     dnf -y -q reinstall shadow-utils && \
     # fetch CVE updates (can exclude rpms to prevent update, eg., --exclude=odo)
@@ -193,8 +143,8 @@ RUN \
     # Change permissions to let any arbitrary user
     mkdir -p /projects && \
     for f in "${HOME}" "/etc/passwd" "/etc/group" "/projects"; do \
-        echo "Changing permissions on ${f}" && chgrp -R 0 ${f} && \
-        chmod -R g+rwX ${f}; \
+    echo "Changing permissions on ${f}" && chgrp -R 0 ${f} && \
+    chmod -R g+rwX ${f}; \
     done && \
     # Generate passwd.template
     cat /etc/passwd | \
@@ -207,7 +157,6 @@ RUN \
     mkdir -p /home/tooling/.local/bin
 
 RUN \
-    ## Rootless podman install #2: install podman buildah skopeo e2fsprogs (above)
     ## Rootless podman install #3: tweaks to make rootless buildah work
     touch /etc/subgid /etc/subuid  && \
     chmod g=u /etc/subgid /etc/subuid /etc/passwd  && \
@@ -248,7 +197,7 @@ RUN \
     ########################################################################
     # Nodejs
     ########################################################################
-    # see https://catalog.redhat.com/software/containers/ubi8/nodejs-20/647466671b1440a9c7cd4704?gs=&q=node&container-tabs=dockerfile
+    # see https://catalog.redhat.com/software/containers/ubi8/nodejs-18/647466671b1440a9c7cd4704?gs=&q=node&container-tabs=dockerfile
     SL=/usr/bin/nodemon; if [[ ! -f ${SL} ]] && [[ ! -L ${SL} ]]; then ln -s /usr/lib/node_modules/nodemon/bin/nodemon.js ${SL}; else ls -la ${SL}; fi && \
     SL=/usr/bin/python3; if [[ ! -f ${SL} ]] && [[ ! -L ${SL} ]]; then ln -s /usr/libexec/platform-python ${SL}; else ls -la ${SL}; fi && \
     ########################################################################
@@ -292,12 +241,12 @@ RUN \
     # set up ~/.venv
     cd /home/tooling; /usr/bin/python${PYTHON_VERSION} -m venv .venv && \
     echo "<== Create python symlinks (or display existing ones)"
-    # TODO: to enable flake8 as default linter, add this to project's .vscode/settings.json file
-    # {
-    #     "python.linting.flake8Enabled": true,
-    #     "python.linting.enabled": true,
-    #     "python.linting.pylintEnabled": false
-    # }
+# TODO: to enable flake8 as default linter, add this to project's .vscode/settings.json file
+# {
+#     "python.linting.flake8Enabled": true,
+#     "python.linting.enabled": true,
+#     "python.linting.pylintEnabled": false
+# }
 
 RUN \
     ########################################################################
@@ -335,11 +284,11 @@ RUN \
     ./configure --enable-xdebug; make; make install && \
     # do we need all these settings? or just the zend_extension?
     echo -e "[xdebug]\n\
-zend_extension=$(find /usr/lib64/php/modules -name xdebug.so)\n\
-xdebug.client_port = 9001\n\
-xdebug.mode = debug\n\
-xdebug.start_with_request = yes\n\
-xdebug.log=\${HOME}/xdebug.log" >> /etc/php.ini && \
+    zend_extension=$(find /usr/lib64/php/modules -name xdebug.so)\n\
+    xdebug.client_port = 9001\n\
+    xdebug.mode = debug\n\
+    xdebug.start_with_request = yes\n\
+    xdebug.log=\${HOME}/xdebug.log" >> /etc/php.ini && \
     if [[ -f /etc/php.ini ]]; then grep xdebug /etc/php.ini; fi && \
     # set up httpd
     sed -i 's/opt\/app-root\/src/projects/' /etc/httpd/conf/httpd.conf && \
@@ -347,7 +296,7 @@ xdebug.log=\${HOME}/xdebug.log" >> /etc/php.ini && \
     sed -i 's/CustomLog \"|\/usr\/bin\/cat\"/CustomLog \"\/var\/log\/httpd\/access_log\"/' /etc/httpd/conf/httpd.conf && \
     sed -i 's/ErrorLog \"|\/usr\/bin\/cat\"/ErrorLog \"\/var\/log\/httpd\/error_log\"/' /etc/httpd/conf/httpd.conf && \
     chmod -R 777 /var/run/httpd /var/log/httpd/ /etc/pki/ /etc/httpd/logs/ \
-        /etc/httpd/conf/httpd.conf /etc/php.ini ${HOME}/xdebug.log && \
+    /etc/httpd/conf/httpd.conf /etc/php.ini ${HOME}/xdebug.log && \
     # verify xdebug works
     php --ini; echo "<?php xdebug_info() ?>" | php; php -v
 
@@ -360,21 +309,9 @@ xdebug.log=\${HOME}/xdebug.log" >> /etc/php.ini && \
 
 # COPY --from=go-builder $REMOTE_SOURCES_DIR/camelk/app/kamel /usr/local/bin/kamel
 
-# see container.yaml
-COPY --from=go-builder $REMOTE_SOURCES_DIR/gopls/app/gopls/gopls $HOME/go/bin/gopls
-COPY --from=go-builder $REMOTE_SOURCES_DIR/kubedock/app/kubedock $HOME/go/bin/kubedock
-COPY --from=go-builder $REMOTE_SOURCES_DIR/stow/app/build/bin/ /usr/bin/
-COPY --from=go-builder $REMOTE_SOURCES_DIR/stow/app/build/share/ /usr/share/
-
-# Create symbolic links from /home/tooling/ -> /home/user/
-RUN stow . -t /home/user/ -d /home/tooling/ --no-folding && \
-    # .viminfo cannot be a symbolic link for security reasons, so copy it to /home/user/
-    cp /home/tooling/.viminfo /home/user/.viminfo
-
-
-    ########################################################################
-    # Cleanup and Summaries
-    ########################################################################
+########################################################################
+# Cleanup and Summaries
+########################################################################
 RUN \
     rm -fr $REMOTE_SOURCES_DIR && \
     chmod 755 /usr/local/bin/* && \
@@ -427,9 +364,9 @@ RUN \
     echo "========" && \
     echo -n "clangd:    "; clangd --version; \
     if [[ -f /usr/bin/dotnet ]]; then \
-      echo -n "dotnet:    "; dotnet --info; \
+    echo -n "dotnet:    "; dotnet --info; \
     else \
-      echo "dotnet: not available on $(uname -m)"; \
+    echo "dotnet: not available on $(uname -m)"; \
     fi; \
     echo -n "go:    "; go version; \
     echo -n "php:    "; php -v; \
@@ -437,6 +374,10 @@ RUN \
 
 # A last pass to make sure that an arbitrary user can write in $HOME
 RUN chgrp -R 0 /home && chmod -R g=u /home
+
+# ADD the Angular dependencies
+# Install Angular CLI globally
+RUN npm install -g @angular/cli@16
 
 ENV HOME=/home/user
 ENTRYPOINT [ "/entrypoint.sh" ]
