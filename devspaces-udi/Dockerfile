@@ -392,7 +392,8 @@ ENV HOME=/home/user
 
 
 # Ensure the entrypoint script is executable
-RUN chmod 755 /entrypoint.sh
+COPY etc/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Set the working directory
 WORKDIR /projects
