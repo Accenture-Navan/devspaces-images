@@ -1,7 +1,12 @@
 # https://registry.access.redhat.com/rhel8/go-toolset
 FROM registry.redhat.io/rhel8/go-toolset:1.21.13-1.1727172995 as go-builder
 
-USER root
+# Install necessary packages
+RUN apt-get update && apt-get install -y bash
+
+# Add a non-root user for security
+RUN adduser --uid 5678 --disabled-password --gecos "" appuser
+
 
 COPY $REMOTE_SOURCES $REMOTE_SOURCES_DIR
 
@@ -15,12 +20,18 @@ RUN \
     tar -xzf /tmp/oc.tar.gz -C /usr/local/bin/ oc && \
     chmod +x /usr/local/bin/oc && \
     rm /tmp/oc.tar.gz
- 
+
 
 # https://registry.access.redhat.com/ubi8-minimal
-FROM registry.redhat.io/ubi8-minimal:latest
+FROM registry.redhat.io/ubi8/ubi:latest
 
-USER root
+# Create a non-root user
+# Add a non-root user for security
+
+# Install necessary packages
+RUN yum install -y bash
+
+RUN useradd -u 5678 -m appuser
 
 ENV \
     # We install everything to /home/tooling/ as /home/user/ may get overwritten, see github.com/eclipse/che/issues/22412
@@ -71,7 +82,11 @@ LABEL summary="$SUMMARY" \
     io.openshift.expose-services="" \
     usage=""
 
-RUN mkdir -p /home/tooling/
+# Set environment variables for the non root user 
+ENV HOME=/home/appuser  	
+
+RUN mkdir -p $HOME/tooling/
+
 ADD etc/storage.conf $HOME/.config/containers/storage.conf
 ADD etc/entrypoint.sh /entrypoint.sh
 COPY $REMOTE_SOURCES $REMOTE_SOURCES_DIR
@@ -340,13 +355,6 @@ RUN \
     echo -n "jq:     "; jq --version; \
     echo -n "yq:     "; yq --version; \
     echo "========" && \
-    echo "python venv install:"; source ${HOME}/.venv/bin/activate && python -V; \
-    echo -n "pip:    "; pip -V; \
-    echo -n "flake8: "; flake8 --version | tr "\n" "," | sed -r -e "s@,\$@\n@"; \
-    echo -n "pytest: "; pytest --version; \
-    echo -n "jq:     "; jq --version; \
-    echo -n "yq:     "; yq --version; \
-    echo "========" && \
     echo -n "oc:      "; oc version; \
     echo -n "tkn:     "; tkn version; \
     echo -n "odo:     "; odo version; \
@@ -379,7 +387,19 @@ RUN chgrp -R 0 /home && chmod -R g=u /home
 # Install Angular CLI globally
 RUN npm install -g @angular/cli@16
 
+# Set environment variables
 ENV HOME=/home/user
-ENTRYPOINT [ "/entrypoint.sh" ]
+
+
+# Ensure the entrypoint script is executable
+RUN chmod 755 /entrypoint.sh
+
+# Set the working directory
 WORKDIR /projects
+
+
+# Define the entrypoint
+ENTRYPOINT [ "/entrypoint.sh" ]
+
+# Keep the container running (for debugging or development)
 CMD tail -f /dev/null
